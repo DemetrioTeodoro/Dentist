@@ -1,0 +1,330 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Usuários e acesso ──────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  DENTIST
+  RECEPTION
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  passwordHash  String
+  role          Role
+  cro           String?
+  color         String   @default("#0ea5e9") // cor na agenda
+  commissionPct Decimal  @default(0) @db.Decimal(5, 2)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  appointments   Appointment[]
+  clinicalNotes  ClinicalNote[]
+  treatmentPlans TreatmentPlan[]
+  doneItems      TreatmentItem[] @relation("DoneBy")
+  attachments    Attachment[]
+  anamneses      Anamnesis[]
+  auditLogs      AuditLog[]
+  stockMoves     StockMovement[]
+}
+
+// Registro de acesso/alteração em dados sensíveis (LGPD)
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  action    String // ex.: "patient.view", "note.create"
+  entity    String
+  entityId  String
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+}
+
+// ─── Pacientes e prontuário ─────────────────────────────────────────
+
+model Patient {
+  id          String    @id @default(cuid())
+  name        String
+  cpf         String?   @unique
+  birthDate   DateTime? @db.Date
+  gender      String?
+  phone       String?
+  email       String?
+  address     String?
+  responsible String? // responsável legal (menores)
+  notes       String?
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  anamneses      Anamnesis[]
+  teeth          ToothRecord[]
+  clinicalNotes  ClinicalNote[]
+  attachments    Attachment[]
+  appointments   Appointment[]
+  treatmentPlans TreatmentPlan[]
+  receivables    Receivable[]
+
+  @@index([name])
+}
+
+// Cada preenchimento gera uma nova versão; a mais recente é a vigente
+model Anamnesis {
+  id          String   @id @default(cuid())
+  patientId   String
+  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  answers     Json // { pergunta: resposta }
+  allergies   String?
+  medications String?
+  alerts      String? // alertas exibidos em destaque no prontuário
+  filledById  String
+  filledBy    User     @relation(fields: [filledById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([patientId, createdAt])
+}
+
+enum ToothStatus {
+  HEALTHY
+  CARIES
+  RESTORED
+  MISSING
+  ENDODONTIC
+  CROWN
+  IMPLANT
+  EXTRACTION_INDICATED
+  FRACTURED
+}
+
+// Estado atual de cada dente (numeração FDI: 11–48 permanentes, 51–85 decíduos)
+model ToothRecord {
+  id        String      @id @default(cuid())
+  patientId String
+  patient   Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  tooth     Int
+  status    ToothStatus
+  faces     String? // ex.: "MOD" (mesial, oclusal, distal, vestibular, lingual/palatina)
+  notes     String?
+  updatedAt DateTime    @updatedAt
+
+  @@unique([patientId, tooth])
+}
+
+// Evolução clínica: somente inclusão (não se edita nem apaga prontuário)
+model ClinicalNote {
+  id            String       @id @default(cuid())
+  patientId     String
+  patient       Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  dentistId     String
+  dentist       User         @relation(fields: [dentistId], references: [id])
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+  content       String
+  createdAt     DateTime     @default(now())
+
+  @@index([patientId, createdAt])
+}
+
+model Attachment {
+  id           String   @id @default(cuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  fileName     String
+  storedName   String   @unique
+  mimeType     String
+  size         Int
+  description  String?
+  uploadedById String
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+// ─── Agenda ─────────────────────────────────────────────────────────
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  ARRIVED
+  IN_PROGRESS
+  DONE
+  NO_SHOW
+  CANCELED
+}
+
+model Appointment {
+  id        String            @id @default(cuid())
+  patientId String
+  patient   Patient           @relation(fields: [patientId], references: [id])
+  dentistId String
+  dentist   User              @relation(fields: [dentistId], references: [id])
+  startsAt  DateTime
+  endsAt    DateTime
+  status    AppointmentStatus @default(SCHEDULED)
+  notes     String?
+  createdAt DateTime          @default(now())
+
+  clinicalNotes ClinicalNote[]
+
+  @@index([dentistId, startsAt])
+  @@index([startsAt])
+}
+
+// ─── Procedimentos, planos de tratamento e orçamentos ───────────────
+
+model Procedure {
+  id          String          @id @default(cuid())
+  name        String
+  code        String?         @unique // ex.: código TUSS
+  price       Decimal         @db.Decimal(10, 2)
+  durationMin Int             @default(30)
+  active      Boolean         @default(true)
+  items       TreatmentItem[]
+  materials   ProcedureMaterial[]
+}
+
+enum PlanStatus {
+  DRAFT // orçamento em elaboração
+  APPROVED // aprovado pelo paciente
+  REJECTED
+  COMPLETED
+  CANCELED
+}
+
+model TreatmentPlan {
+  id         String          @id @default(cuid())
+  patientId  String
+  patient    Patient         @relation(fields: [patientId], references: [id])
+  dentistId  String
+  dentist    User            @relation(fields: [dentistId], references: [id])
+  status     PlanStatus      @default(DRAFT)
+  discount   Decimal         @default(0) @db.Decimal(10, 2)
+  notes      String?
+  approvedAt DateTime?
+  createdAt  DateTime        @default(now())
+  items      TreatmentItem[]
+  receivables Receivable[]
+}
+
+enum ItemStatus {
+  PENDING
+  DONE
+}
+
+model TreatmentItem {
+  id          String        @id @default(cuid())
+  planId      String
+  plan        TreatmentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  procedureId String
+  procedure   Procedure     @relation(fields: [procedureId], references: [id])
+  tooth       Int?
+  faces       String?
+  price       Decimal       @db.Decimal(10, 2)
+  status      ItemStatus    @default(PENDING)
+  doneAt      DateTime?
+  doneById    String?
+  doneBy      User?         @relation("DoneBy", fields: [doneById], references: [id])
+  stockMoves  StockMovement[]
+}
+
+// ─── Financeiro ─────────────────────────────────────────────────────
+
+enum PaymentMethod {
+  CASH
+  PIX
+  DEBIT
+  CREDIT
+  TRANSFER
+  INSURANCE
+}
+
+// Parcela a receber; quitada quando paidAt está preenchido
+model Receivable {
+  id          String         @id @default(cuid())
+  patientId   String
+  patient     Patient        @relation(fields: [patientId], references: [id])
+  planId      String?
+  plan        TreatmentPlan? @relation(fields: [planId], references: [id])
+  description String
+  amount      Decimal        @db.Decimal(10, 2)
+  dueDate     DateTime       @db.Date
+  paidAt      DateTime?
+  method      PaymentMethod?
+  createdAt   DateTime       @default(now())
+
+  @@index([dueDate])
+  @@index([paidAt])
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  description String
+  category    String
+  amount      Decimal  @db.Decimal(10, 2)
+  date        DateTime @db.Date
+  createdAt   DateTime @default(now())
+
+  @@index([date])
+}
+
+// ─── Estoque ────────────────────────────────────────────────────────
+
+model Product {
+  id        String   @id @default(cuid())
+  name      String
+  unit      String   @default("un") // un, cx, pct, ml, g...
+  stock     Decimal  @default(0) @db.Decimal(10, 2) // saldo atual (pode ficar negativo)
+  minStock  Decimal  @default(0) @db.Decimal(10, 2) // abaixo disso, alerta de reposição
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  materials ProcedureMaterial[]
+  moves     StockMovement[]
+
+  @@index([name])
+}
+
+// Material consumido a cada execução de um procedimento (ex.: cirurgia usa 4 gazes)
+model ProcedureMaterial {
+  id          String    @id @default(cuid())
+  procedureId String
+  procedure   Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  quantity    Decimal   @db.Decimal(10, 2)
+
+  @@unique([procedureId, productId])
+}
+
+enum StockMoveType {
+  IN // entrada (compra)
+  OUT // saída manual (perda, vencimento, uso avulso)
+  ADJUST // ajuste de inventário
+  PROCEDURE // baixa automática por procedimento realizado
+}
+
+// Histórico do estoque; quantity é positiva para entradas e negativa para saídas
+model StockMovement {
+  id              String         @id @default(cuid())
+  productId       String
+  product         Product        @relation(fields: [productId], references: [id])
+  type            StockMoveType
+  quantity        Decimal        @db.Decimal(10, 2)
+  notes           String?
+  treatmentItemId String?
+  treatmentItem   TreatmentItem? @relation(fields: [treatmentItemId], references: [id], onDelete: SetNull)
+  userId          String
+  user            User           @relation(fields: [userId], references: [id])
+  createdAt       DateTime       @default(now())
+
+  @@index([productId, createdAt])
+}
