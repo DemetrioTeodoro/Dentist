@@ -1,36 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# OdontoClínica
 
-## Getting Started
+Sistema de gestão para clínica odontológica: prontuário eletrônico, agenda, orçamentos/planos de tratamento e financeiro.
 
-First, run the development server:
+**Stack:** Next.js 15 (App Router, Server Actions) · TypeScript · Prisma · PostgreSQL · Tailwind CSS 4
+
+## Rodando localmente
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+docker compose up -d          # PostgreSQL na porta 5432
+cp .env.example .env          # ajuste AUTH_SECRET
+npm install
+npm run db:migrate            # cria as tabelas
+npm run db:seed               # usuários, procedimentos e pacientes de exemplo
+npm run dev                   # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Usuários de exemplo:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| E-mail                 | Perfil        |
+| ---------------------- | ------------- |
+| admin@clinica.com      | Administrador |
+| ana@clinica.com        | Dentista      |
+| bruno@clinica.com      | Dentista      |
+| recepcao@clinica.com   | Recepção      |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+> O servidor usa o fuso horário da máquina para a agenda. Em produção, defina `TZ=America/Sao_Paulo` no ambiente do processo.
 
-## Learn More
+## Módulos
 
-To learn more about Next.js, take a look at the following resources:
+- **Pacientes** — cadastro, busca por nome/CPF/telefone, responsável legal para menores.
+- **Prontuário**
+  - Anamnese versionada (cada preenchimento gera uma nova versão) com alertas e alergias em destaque.
+  - Odontograma interativo (FDI, permanentes e decíduos), marcação por face.
+  - Evolução clínica somente-inclusão (não pode ser editada nem apagada).
+  - Exames e anexos (radiografias, fotos, PDFs) servidos apenas a usuários autorizados.
+- **Agenda** — visão diária por dentista, detecção de conflito de horário, fluxo de status
+  (agendado → confirmado → aguardando → em atendimento → atendido / faltou / cancelado),
+  link de confirmação por WhatsApp.
+- **Orçamentos** — plano de tratamento por dente/face, desconto, impressão/PDF para assinatura,
+  aprovação gera as parcelas; marcar um procedimento como realizado registra a evolução automaticamente.
+- **Financeiro** — contas a receber, baixa por forma de pagamento, inadimplência, despesas,
+  saldo do mês e comissão por dentista (sobre procedimentos realizados).
+- **Estoque** — produtos com estoque mínimo e alerta de reposição, entradas/saídas/ajustes,
+  histórico de movimentações. Cada procedimento pode ter sua lista de materiais (ex.: cirurgia
+  usa 4 gazes); ao marcar o procedimento como realizado, os materiais são baixados automaticamente.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Perfis de acesso
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+|                         | Admin | Dentista | Recepção |
+| ----------------------- | :---: | :------: | :------: |
+| Agenda e cadastro       |   ✓   |    ✓     |    ✓     |
+| Dados clínicos          |   ✓   |    ✓     |          |
+| Orçamentos              |   ✓   |    ✓     |    ✓     |
+| Financeiro              |   ✓   |          |    ✓     |
+| Estoque (movimentar)    |   ✓   |    ✓     |    ✓     |
+| Produtos e materiais    |   ✓   |    ✓     |          |
+| Procedimentos/usuários  |   ✓   |          |          |
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Acessos a dados clínicos e alterações relevantes ficam registrados na tabela `AuditLog` (LGPD).
